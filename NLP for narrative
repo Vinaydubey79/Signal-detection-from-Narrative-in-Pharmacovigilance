@@ -1,0 +1,150 @@
+# ----------------------------------------
+# NLP for PV Narrative Extraction (ICSR Auto-Highlights) - Updated (No broken scispaCy link)
+# ----------------------------------------
+
+import re
+import pandas as pd
+
+# -----------------------------
+# Synthetic patient narratives (all Acyclovir)
+# -----------------------------
+narratives = [
+    """P1: A 34-year-old male on oral acyclovir 400 mg twice daily for herpes labialis reported
+    nausea and mild headache on day 3. Symptoms improved after dose reduction; investigator assessed as possibly related.""",
+    """P2: 67-year-old female received IV acyclovir 500 mg every 8 hours for herpes zoster ophthalmicus.
+    On day 2, serum creatinine rose (acute kidney injury) and patient had vomiting. Drug was stopped and renal function improved.
+    Causality considered probably related by physician due to positive dechallenge.""",
+    """P3: 22-year-old female using topical acyclovir cream developed localized rash and pruritus at the application site.
+    Treatment continued with emollients; relationship considered unlikely related.""",
+    """P4: 45-year-old male on oral acyclovir 800 mg five times daily for shingles developed dizziness and fatigue.
+    Dose was maintained; symptoms resolved spontaneously. Investigator: possible relatedness.""",
+    """P5: 58-year-old male with renal impairment received IV acyclovir 250 mg every 12 hours.
+    He developed confusion and hallucinations on day 3. Acyclovir was discontinued with gradual improvement.
+    Causality assessed as certain due to rechallenge information from prior admission showing recurrence.""",
+    """P6: 30-year-old female on oral acyclovir 400 mg three times daily reported diarrhea and abdominal pain.
+    Managed conservatively; relation judged as probable by the site due to temporal association.""",
+    """P7: 72-year-old male received IV acyclovir 600 mg q8h; developed tremor and agitation within 48 hours.
+    Dose reduced; symptoms improved. Assessed as probable related.""",
+    """P8: 26-year-old male on acyclovir 200 mg five times daily experienced headache and dizziness.
+    Continued therapy; causality considered possible.""",
+    """P9: 40-year-old female taking oral acyclovir 400 mg twice daily reported skin rash (generalized maculopapular).
+    Drug was interrupted; rash resolved after 3 days. Investigator marked as probable related.""",
+    """P10: 55-year-old female on IV acyclovir 10 mg/kg every 8 hours developed elevated creatinine and nausea.
+    Therapy adjusted with hydration; relationship deemed possible.""",
+    """P11: 29-year-old male on acyclovir 800 mg thrice daily reported severe vomiting and dizziness after first two doses.
+    Drug was temporarily withheld; dechallenge positive. Causality: probable.""",
+    """P11: 29-year-old male on acyclovir 800 mg thrice daily reported severe vomiting and dizziness after first two doses.
+    Drug was temporarily withheld; dechallenge positive. Causality: probable.""",
+    """P12: 63-year-old female receiving oral acyclovir 400 mg OD for suppression reported itching (pruritus) and mild rash.
+    Physician assessed unrelated due to concurrent detergent exposure; labeled as unlikely related."""
+]
+
+# Dictionaries
+AE_TERMS = [
+    "nausea","vomiting","diarrhea","abdominal pain","headache","dizziness","fatigue",
+    "rash","pruritus","itching","tremor","agitation","confusion","hallucinations",
+    "acute kidney injury","renal impairment","elevated creatinine"
+]
+
+CAUSALITY_MAP = {
+    "certain": "Certain",
+    "probable": "Probable",
+    "possible": "Possible",
+    "possibly": "Possible",
+    "unlikely": "Unlikely",
+    "unrelated": "Unrelated",
+}
+
+DOSE_PATTERNS = [
+    r"\b\d+(\.\d+)?\s*mg/kg\b",
+    r"\b\d+(\.\d+)?\s*mg\b",
+    r"\b\d+(\.\d+)?\s*g\b"
+]
+
+FREQ_PATTERNS = [
+    r"\bonce daily\b", r"\btwice daily\b", r"\bthrice daily\b",
+    r"\bthree times daily\b", r"\bfive times daily\b",
+    r"\bevery\s+\d+\s*hours?\b", r"\bq\d+h\b",
+    r"\bod\b", r"\bbid\b", r"\btid\b", r"\bqid\b"
+]
+
+ROUTE_TERMS = ["oral","iv","intravenous","topical","cream","ointment"]
+
+def find_dose(text):
+    for pat in DOSE_PATTERNS:
+        m = re.search(pat, text, flags=re.I)
+        if m:
+            return m.group(0)
+    return ""
+
+def find_freq(text):
+    for pat in FREQ_PATTERNS:
+        m = re.search(pat, text, flags=re.I)
+        if m:
+            return m.group(0)
+    return ""
+
+def find_route(text):
+    for r in ROUTE_TERMS:
+        if re.search(rf"\b{r}\b", text, flags=re.I):
+            if r in ["iv","intravenous"]:
+                return "IV"
+            if r == "oral":
+                return "Oral"
+            if r in ["topical","cream","ointment"]:
+                return "Topical"
+    return ""
+
+def find_ae(text):
+    hits = []
+    t_low = text.lower()
+    for term in AE_TERMS:
+        if term in t_low:
+            hits.append(term)
+    return "; ".join(dict.fromkeys(hits))
+
+def find_causality(text):
+    for key, label in CAUSALITY_MAP.items():
+        if re.search(rf"\b{key}\b", text, flags=re.I):
+            return label
+    return ""
+
+# Extract
+rows = []
+for i, narr in enumerate(narratives, start=1):
+    rows.append({
+        "Patient_ID": f"P{i:02d}",
+        "Drug": "Acyclovir",
+        "Route": find_route(narr),
+        "Dose": find_dose(narr),
+        "Frequency": find_freq(narr),
+        "Adverse_Events": find_ae(narr),
+        "Causality": find_causality(narr),
+        "Narrative": re.sub(r"\s+", " ", narr).strip()
+    })
+
+cases_df = pd.DataFrame(rows)
+
+# Summary
+ae_rows = []
+for _, r in cases_df.iterrows():
+    for ae in r["Adverse_Events"].split(";"):
+        ae = ae.strip()
+        if ae:
+            ae_rows.append({"Adverse_Event": ae, "Patient_ID": r["Patient_ID"]})
+
+ae_df = pd.DataFrame(ae_rows)
+summary_df = (ae_df.groupby("Adverse_Event")
+             .agg(Case_Count=("Patient_ID","nunique"))
+             .reset_index()
+             .sort_values("Case_Count", ascending=False))
+summary_df["Percent_of_Cases"] = (summary_df["Case_Count"] / len(cases_df) * 100).round(1)
+summary_df["Signal_Flag_>=2"] = summary_df["Case_Count"] >= 2
+
+# Export
+out_path = "/content/acyclovir_icSR_updated.xlsx"
+with pd.ExcelWriter(out_path) as writer:
+    cases_df.to_excel(writer, index=False, sheet_name="Cases")
+    summary_df.to_excel(writer, index=False, sheet_name="Cumulative_AE")
+
+out_path
